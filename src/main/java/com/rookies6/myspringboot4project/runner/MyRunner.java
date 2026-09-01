@@ -37,8 +37,9 @@ public class MyRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
+        logger.info("Logger 구현체 클래스명 {}", logger.getClass().getName());
         logger.debug("MyRunner run() 호출됨!!");
-        System.out.println("Application Name: " + applicationName);
+        logger.debug("Application Name: {}", applicationName);
 
         //Consumer 인터페이스를 Anonymous Inner Class로 표현
         args.getOptionNames().forEach(new Consumer<String>() {
@@ -57,12 +58,14 @@ public class MyRunner implements ApplicationRunner {
         //Consumer 인터페이스를 Method Reference로 표현
         args.getOptionNames().forEach(System.out::println);
 
-        System.out.println("${myboot.name} = " + name);
-        System.out.println("${myboot.age} = " + age);
-        System.out.println("${myboot.fullName} = " + environment.getProperty("myboot.fullName"));
-        System.out.println("MyBootProperties getName() = " + properties.getName());
-        System.out.println("MyBootProperties getAge() = " + properties.getAge());
-        System.out.println("MyBootProperties getFullname() = " + properties.getFullname());
-        System.out.println("현재 활성화 된 CustomVO = " + customVO);
+        logger.debug("${myboot.name} = {}", name);
+        logger.debug("${myboot.age} = {}", age);
+        logger.debug("${myboot.fullName} = {}", environment.getProperty("myboot.fullName"));
+
+        logger.info("MyBootProperties getName() = {}", properties.getName());
+        logger.info("MyBootProperties getAge() = {}", properties.getAge());
+        logger.info("MyBootProperties getFullname() = {}", properties.getFullname());
+
+        logger.debug("현재 활성화 된 CustomVO = {}", customVO);
     }
 }
