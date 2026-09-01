@@ -1,4 +1,4 @@
-package com.rookies6.myspringboot4project.entiry;
+package com.rookies6.myspringboot4project.entity;
 
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
