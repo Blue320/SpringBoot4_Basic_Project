@@ -62,6 +62,7 @@ public class StudentDTO {
         private String studentNumber;
         private StudentDetailResponse detail;
 
+        // Entity를 DTO로 변환하는 과정
         public static Response fromEntity(Student student) {
             StudentDetailResponse detailResponse = student.getStudentDetail() != null
                     ? StudentDetailResponse.builder()
