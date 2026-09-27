@@ -1,13 +1,17 @@
 package com.rookies6.myspringboot4project.service;
 
 import com.rookies6.myspringboot4project.controller.dto.StudentDTO;
+import com.rookies6.myspringboot4project.entity.Department;
 import com.rookies6.myspringboot4project.entity.Student;
 import com.rookies6.myspringboot4project.entity.StudentDetail;
 import com.rookies6.myspringboot4project.exception.BusinessException;
 import com.rookies6.myspringboot4project.exception.ErrorCode;
+import com.rookies6.myspringboot4project.repository.DepartmentRepository;
 import com.rookies6.myspringboot4project.repository.StudentDetailRepository;
 import com.rookies6.myspringboot4project.repository.StudentRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,18 +24,26 @@ public class StudentService {
 
     private final StudentRepository studentRepository;
     private final StudentDetailRepository studentDetailRepository;
+    private final DepartmentRepository departmentRepository;
 
+    // 페이징 처리된 모든 학생 조회
+    public Page<StudentDTO.Response> getAllStudents(Pageable pageable) {
+        //findAll() 대신 Fetch Join 을 사용하여 N+1 문제를 해결한다
+        Page<Student> students = studentRepository.findAllWithDetails(pageable);
+        return students.map(StudentDTO.Response::fromEntity);
+    }
+
+    // 페이징 처리 없는 모든 학생 조회
     public List<StudentDTO.Response> getAllStudents() {
-        return studentRepository.findAll()
+        //findAll() 대신 Fetch Join 을 사용하여 N+1 문제를 해결한다
+        return studentRepository.findAllWithDetails()
                 .stream()
-                .map(studentEntity -> StudentDTO.Response.fromEntity(studentEntity))
-                //.map(StudentDTO.Response::fromEntity)
+                .map(StudentDTO.Response::fromEntity)
                 .toList();
-        //.collect(Collectors.toList());
     }
 
     public StudentDTO.Response getStudentById(Long id) {
-        Student student = studentRepository.findByIdWithStudentDetail(id)
+        Student student = studentRepository.findByIdWithAllDetails(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
                         "Student", "id", id));
         return StudentDTO.Response.fromEntity(student);
@@ -44,8 +56,39 @@ public class StudentService {
         return StudentDTO.Response.fromEntity(student);
     }
 
+    // 페이징 처리된 특정 학과의 학생 조회
+    public Page<StudentDTO.Response> getStudentsByDepartmentId(Long departmentId, Pageable pageable) {
+        // Validate department exists
+        if (!departmentRepository.existsById(departmentId)) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
+                    "Department", "id", departmentId);
+        }
+
+        Page<Student> students = studentRepository.findByDepartmentId(departmentId, pageable);
+        return students.map(StudentDTO.Response::fromEntity);
+    }
+
+    // 페이징 처리 없는 특정 학과의 학생 조회
+    public List<StudentDTO.Response> getStudentsByDepartmentId(Long departmentId) {
+        // Validate department exists
+        if (!departmentRepository.existsById(departmentId)) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
+                    "Department", "id", departmentId);
+        }
+
+        return studentRepository.findByDepartmentId(departmentId)
+                .stream()
+                .map(StudentDTO.Response::fromEntity)
+                .toList();
+    }
+
     @Transactional
     public StudentDTO.Response createStudent(StudentDTO.Request request) {
+        // Validate department exists
+        Department department = departmentRepository.findById(request.getDepartmentId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
+                        "Department", "id", request.getDepartmentId()));
+
         // Validate student number is not already in use
         if (studentRepository.existsByStudentNumber(request.getStudentNumber())) {
             throw new BusinessException(ErrorCode.STUDENT_NUMBER_DUPLICATE,
@@ -64,29 +107,31 @@ public class StudentService {
                     request.getDetailRequest().getPhoneNumber());
         }
 
-        // Create student 엔티티 생성
+        // Create student entity
         Student student = Student.builder()
-                .name(request.getName())  //이름
-                .studentNumber(request.getStudentNumber())  //학번
+                .name(request.getName())
+                .studentNumber(request.getStudentNumber())
+                //Student 와 Department 연관관계 저장
+                .department(department)
                 .build();
 
-        // Create StudentDetail 엔티티 생성
+        // Create student detail if provided
         if (request.getDetailRequest() != null) {
             StudentDetail studentDetail = StudentDetail.builder()
-                    .address(request.getDetailRequest().getAddress()) //주소
-                    .phoneNumber(request.getDetailRequest().getPhoneNumber()) //전화번호
-                    .email(request.getDetailRequest().getEmail()) //이메일
-                    .dateOfBirth(request.getDetailRequest().getDateOfBirth()) //생년월일
-                    //생성하는 StudentDetail과 연관된 Student 엔티티 객체를 저장
+                    .address(request.getDetailRequest().getAddress())
+                    .phoneNumber(request.getDetailRequest().getPhoneNumber())
+                    .email(request.getDetailRequest().getEmail())
+                    .dateOfBirth(request.getDetailRequest().getDateOfBirth())
+                    //StudentDetail 과 Student 연관관계 저장
                     .student(student)
                     .build();
-            //양방향 연관관계이므로 Student와 연관된 StduentDetail 엔티티 객체를 저장
+
+            //Student 와 StudentDetail 연관관계 저장
             student.setStudentDetail(studentDetail);
         }
 
-        // Student와 StudentDetail의 라이프사이클이 동일하므로 Student만 저장합
+        // Save and return the student
         Student savedStudent = studentRepository.save(student);
-        // Student를 StudentDTO.Response 로 변환
         return StudentDTO.Response.fromEntity(savedStudent);
     }
 
@@ -97,9 +142,13 @@ public class StudentService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
                         "Student", "id", id));
 
-        // 저장된 학번과 요청한 학번이 일치하지 않으면
+        // Validate department exists (if changing)
+        Department department = departmentRepository.findById(request.getDepartmentId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
+                        "Department", "id", request.getDepartmentId()));
+
+        // Check if another student already has the student number
         if (!student.getStudentNumber().equals(request.getStudentNumber()) &&
-                //요청한 학번이 중복되는지 체크하기 위해서 해당학번으로 Student 조회
                 studentRepository.existsByStudentNumber(request.getStudentNumber())) {
             throw new BusinessException(ErrorCode.STUDENT_NUMBER_DUPLICATE,
                     request.getStudentNumber());
@@ -108,16 +157,16 @@ public class StudentService {
         // Update student basic info
         student.setName(request.getName());
         student.setStudentNumber(request.getStudentNumber());
+        student.setDepartment(department);
 
         // Update student detail if provided
         if (request.getDetailRequest() != null) {
-            //Student가 연관된 StudentDetail 객체를 가져오기
             StudentDetail studentDetail = student.getStudentDetail();
 
             // 중복 검사를 먼저 수행한다.
             // 검사용 조회 쿼리가 실행되면 영속성 컨텍스트가 flush 되는데,
             // 값이 채워지지 않은 StudentDetail 을 먼저 연결해 두면
-            // address 등 NOT NULL 컬럼에 null 이 들어가 제약조건 위반이 발생한다.
+            // email, phoneNumber 등 NOT NULL 컬럼에 null 이 들어가 제약조건 위반이 발생한다.
             // Validate email is not already in use (if changing)
             if (isEmailChangingAndExists(studentDetail, request.getDetailRequest())) {
                 throw new BusinessException(ErrorCode.EMAIL_DUPLICATE,
@@ -130,74 +179,16 @@ public class StudentService {
                         request.getDetailRequest().getPhoneNumber());
             }
 
-            // Create new detail if not exists ( 저장된 StudentDetail 정보가 없을 경우 )
+            // Create new detail if not exists
+            // StudentDetail 가 없어서 새롭게 StudentDetail 를 저장하는 경우
             if (studentDetail == null) {
-                // 새로운 StudentDetail 객체생성
                 studentDetail = new StudentDetail();
-                //연관된 Student 객체 저장
+                //양방향 연관관계 저장
                 studentDetail.setStudent(student);
-                //연관된 StudenDetail 객체 저장
                 student.setStudentDetail(studentDetail);
             }
 
-            // Update detail fields
-            studentDetail.setAddress(request.getDetailRequest().getAddress());
-            studentDetail.setPhoneNumber(request.getDetailRequest().getPhoneNumber());
-            studentDetail.setEmail(request.getDetailRequest().getEmail());
-            studentDetail.setDateOfBirth(request.getDetailRequest().getDateOfBirth());
-        }
-
-        // Save and return updated student
-        Student updatedStudent = studentRepository.save(student);
-        return StudentDTO.Response.fromEntity(updatedStudent);
-    }
-
-    @Transactional
-    public StudentDTO.Response updateStudent_Org(Long id, StudentDTO.Request request) {
-        // Find the student
-        Student student = studentRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
-                        "Student", "id", id));
-
-        // 저장된 학번과 요청한 학번이 일치하지 않으면
-        if (!student.getStudentNumber().equals(request.getStudentNumber()) &&
-                //요청한 학번이 중복되는지 체크하기 위해서 해당학번으로 Student 조회
-                studentRepository.existsByStudentNumber(request.getStudentNumber())) {
-            throw new BusinessException(ErrorCode.STUDENT_NUMBER_DUPLICATE,
-                    request.getStudentNumber());
-        }
-
-        // Update student basic info
-        student.setName(request.getName());
-        student.setStudentNumber(request.getStudentNumber());
-
-        // Update student detail if provided
-        if (request.getDetailRequest() != null) {
-            //Student가 연관된 StudentDetail 객체를 가져오기
-            StudentDetail studentDetail = student.getStudentDetail();
-
-            // Create new detail if not exists ( 저장된 StudentDetail 정보가 없을 경우 )
-            if (studentDetail == null) {
-                // 새로운 StudentDetail 객체생성
-                studentDetail = new StudentDetail();
-                //연관된 Student 객체 저장
-                studentDetail.setStudent(student);
-                //연관된 StudenDetail 객체 저장
-                student.setStudentDetail(studentDetail);
-            }
-
-            // Validate email is not already in use (if changing)
-            if (isEmailChangingAndExists(studentDetail, request.getDetailRequest())) {
-                throw new BusinessException(ErrorCode.EMAIL_DUPLICATE,
-                        request.getDetailRequest().getEmail());
-            }
-
-            // Validate phone number is not already in use (if changing)
-            if (isPhoneNumberChangingAndExists(studentDetail, request.getDetailRequest())) {
-                throw new BusinessException(ErrorCode.PHONE_NUMBER_DUPLICATE,
-                        request.getDetailRequest().getPhoneNumber());
-            }
-
+            // StudentDetail 가 있고, StudentDetail 를 수정하는 경우
             // Update detail fields
             studentDetail.setAddress(request.getDetailRequest().getAddress());
             studentDetail.setPhoneNumber(request.getDetailRequest().getPhoneNumber());
@@ -222,9 +213,8 @@ public class StudentService {
     // Helper methods to improve readability and reduce duplication
 
     private boolean hasEmailAndExists(StudentDTO.StudentDetailDTO detailRequest) {
+        //email 은 @NotBlank 로 검증되므로 null / 빈 문자열 검사는 필요 없다
         return detailRequest != null &&
-                detailRequest.getEmail() != null &&
-                !detailRequest.getEmail().isEmpty() &&
                 studentDetailRepository.existsByEmail(detailRequest.getEmail());
     }
 
@@ -233,19 +223,21 @@ public class StudentService {
                 studentDetailRepository.existsByPhoneNumber(detailRequest.getPhoneNumber());
     }
 
-    private boolean isEmailChangingAndExists(StudentDetail currentDetail,
-                                             StudentDTO.StudentDetailDTO newDetail) {
-        return newDetail.getEmail() != null &&
-                !newDetail.getEmail().isEmpty() &&
-                (currentDetail.getEmail() == null ||
-                        !currentDetail.getEmail().equals(newDetail.getEmail())) &&
+    private boolean isEmailChangingAndExists(StudentDetail currentDetail, StudentDTO.StudentDetailDTO newDetail) {
+        //상세정보가 아직 없는 경우 currentDetail 은 null 이다
+        String currentEmail = currentDetail == null ? null : currentDetail.getEmail();
+        //email 은 @NotBlank 로 검증되므로 null / 빈 문자열 검사는 필요 없다
+        //값이 실제로 바뀔 때만 중복을 검사한다 ( 자기 자신의 값은 중복이 아니다 )
+        return !newDetail.getEmail().equals(currentEmail) &&
                 studentDetailRepository.existsByEmail(newDetail.getEmail());
     }
 
-    private boolean isPhoneNumberChangingAndExists(StudentDetail currentDetail,
-                                                   StudentDTO.StudentDetailDTO newDetail) {
-        return (currentDetail.getPhoneNumber() == null ||
-                !currentDetail.getPhoneNumber().equals(newDetail.getPhoneNumber())) &&
+    private boolean isPhoneNumberChangingAndExists(StudentDetail currentDetail, StudentDTO.StudentDetailDTO newDetail) {
+        //상세정보가 아직 없는 경우 currentDetail 은 null 이다
+        String currentPhone = currentDetail == null ? null : currentDetail.getPhoneNumber();
+        //phoneNumber 는 @NotBlank 로 검증되므로 null 검사는 필요 없다
+        //값이 실제로 바뀔 때만 중복을 검사한다 ( 자기 자신의 값은 중복이 아니다 )
+        return !newDetail.getPhoneNumber().equals(currentPhone) &&
                 studentDetailRepository.existsByPhoneNumber(newDetail.getPhoneNumber());
     }
-}
+}
